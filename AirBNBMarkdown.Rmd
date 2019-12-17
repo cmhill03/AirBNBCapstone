@@ -1,0 +1,379 @@
+---
+title: "AirBNB Pricing"
+author: "C. Hill"
+date: "12/13/2019"
+output:
+  pdf_document: default
+  html_document:
+    df_print: paged
+header-includes: 
+  \usepackage{placeins}
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, fig.pos="H", message = FALSE, warning = FALSE)
+```
+
+```{r echo=FALSE, eval=TRUE, include=FALSE, message=FALSE}
+
+train_set<-get(load(file="train_set.RData"))
+test_set<-get(load(file="test_set.RData"))
+validation_set<-get(load(file="validation_set.RData"))
+
+if(!require(tinytex))
+  install.packages("tinytex", repos = "http://cran.us.r-project.org")
+library(tinytex)
+
+if(!require(lubridate))
+  install.packages("lubridate", repos = "http://cran.us.r-project.org")
+library(lubridate)
+
+if(!require(dplyr))
+  install.packages("dplyr", repos = "http://cran.us.r-project.org")
+library(dplyr)
+
+if(!require(stringr))
+  install.packages("stringr", repos = "http://cran.us.r-project.org")
+library(stringr)
+
+if(!require(caret))
+  install.packages("caret", repos = "http://cran.us.r-project.org")
+library(caret)
+
+if(!require(kableExtra))
+  install.packages("kableExtra", repos = "http://cran.us.r-project.org")
+library(kableExtra)
+
+if(!require(rmarkdown))
+  install.packages("rmarkdown", repos = "http://cran.us.r-project.org")
+library(rmarkdown)
+
+if(!require(knitr))
+  install.packages("knitr", repos = "http://cran.us.r-project.org")
+library(knitr)
+
+if(!require(ggplot2))
+  install.packages("ggplot2", repos = "http://cran.us.r-project.org")
+library(ggplot2)
+
+if(!require(rpart.plot))
+  install.packages("rpart.plot", repos = "http://cran.us.r-project.org")
+library(rpart.plot)
+
+
+
+```
+## EXECUTIVE SUMMARY
+
+We currently predict nightly rates for a new AirBNB property in NYC based on the average of the nightly rates for NYC. The goal of this project is to improve the RMSE of the current model. 
+
+**Results:** The RMSE for the validation set is **282.41** compared to 290.25, an improvement of 3%.
+
+**Model Summary:** The model incorporates the following effects on AirBNB prices to make predictions: "Neighborhood Group" + "Minimum Nights" + "Room Type"
+
+Though we expected these factors to have a larger impact on final price, it appears that property quality and size, factors not reflected in the data, have a larger impact on the final price of an AirBNB. 
+
+**Recommendations:** Incorporate the following information into the data:
+1) A new metric such as a star rating system, in order to differentiate the quality of these properties 
+2) Information about size and number of beds.
+
+This data could be added by adding questions when users list the property or by incorporating data such as the Zestimate and number of bedrooms from Zillow matching on address.
+\pagebreak
+
+## Introduction
+
+This project uses data from the Kaggle database (https://www.kaggle.com/dgomonov/new-york-city-airbnb-open-data#AB_NYC_2019.csv) and includes AirBNB listings and locations for 2019 in NYC. Each row represents one property. We split this data into a training, test, and validation set to develop the algorithm.
+
+## Overview
+
+**Data Description:** The data shows a list of AirBNB property listings in NYC for 2019 and includes 16 variables:  
+
+1) *id*: The id of the property
+2) *name*: The name on the property listing
+3) *host_id*: The id of the property host assigned by AirBNB
+4) *host_name*: The name of the property host
+5) *neighbourhood_group*: The area the property is located such as Manhattan or Queens
+6) *neighbourhood*: A more localized description of the area
+7) *latitude*: Latitude
+8) *longitude*: Longitude
+9) *room_type*: The type of room offered including three options: Private room, Entire home/apt, or Shared room
+10) *Price*: The nightly rate of the listing
+11) *Minimum_Nights*: The minimum number of nights allowed to be booked
+12) *number_of_reviews*: The number of reviews on the property
+13) *last_review*: The date of the last review
+14) *reviews_per_month*: The average reviews per month
+15) *calculated_host_listings_count*: The number of listings the host has
+16) *availability_365*: The number of days per year the listing is available
+
+For this project, we split 20% of the data off for a validation set. We then split the remaining data into a test and training set, with 20% in the test set and 80% in the training set. The training set has 31,288 lines and is summarized in tables 1:3.
+\pagebreak
+\FloatBarrier
+```{r echo = FALSE, results = 'asis'}
+
+kable(train_set[1:5,1:5],format = "latex", caption = "Train Set Summary", booktabs = T) %>%
+kable_styling(position = "left")
+
+kable(train_set[1:5,6:12],format = "latex", caption = "Train Set Summary Cont.", booktabs = T) %>%
+kable_styling(position = "left")
+
+kable(train_set[1:5,13:16],format = "latex", caption = "Train Set Summary Cont.", booktabs = T) %>%
+kable_styling(position = "left")
+```
+\FloatBarrier
+
+The data lists properties in 5 neighborhood groups with Manhattan and Brooklyn having the highest average property values. Half of properties fall between $50 to $200 and 93% of properties are priced below $300 per night with a long tail of high end properties at much higher rates (See Figures 1-2).
+
+ ```{r echo=FALSE, fig.align="center", fig.pos="H", fig.cap="Boxplots show the large tail caused by high end properties available in NYC"}
+ 
+ ggplot(train_set, aes(neighbourhood_group, price)) + 
+  geom_boxplot() + 
+  theme_classic() +
+  ggtitle("Price Distribution with Neighborhood Groups")
+  
+ ggplot(train_set, aes(neighbourhood_group, price)) + 
+  ylim(0,300) + 
+  geom_boxplot() + 
+  theme_classic() +
+  ggtitle("Price Distribution with Neighborhood Groups for Prices<=$300")
+  
+ 
+ ```
+
+Each neighbourhood group has 32 to 51 neighborhoods. For example, Allerton and Baychester are neighborhoods in the Bronx.
+
+  ```{r echo = FALSE, results = 'asis', fig.pos="H"} 
+t<-train_set%>%group_by(neighbourhood_group, neighbourhood)%>%summarize(n_properties=n()) %>% group_by(neighbourhood_group)%>% summarize(n_neighbourhoods=n(), n_properties=sum(n_properties))
+
+kable(t[1:5,],format = "latex", caption = "Neighbourhood Summary", booktabs = T) %>%
+  kable_styling(latex_options = c("hold_position", position = "center"))
+  ```
+AirBNB offers three categories of rooms: Private Room, Shared Room, and Entire Home/Apt. Each category has a different price point with "Shared Room" being the least expensive option and "Entire Home/Apt" being the most. Figure 3 shows the number of properties in each category.
+
+```{r echo=FALSE, fig.align="center", fig.pos="H", fig.cap="Shared Rooms are the least common type of listing."}
+ 
+ ggplot(train_set, aes(room_type)) + 
+    geom_histogram(stat="count") + 
+    theme_classic() +
+    ggtitle("Room Type Distribution")
+```
+
+The Minimum Nights shows the minimum number of nights the guest is required to book in order to stay at the property. Typically minimums are low at 1-5 nights with the exception of monthly stays. A few properties have minimum night requirements outside of those ranges.
+
+```{r echo=FALSE, fig.align="center", fig.pos="H", fig.cap="Minimum Night requirements are generally less than a week with a few properties with much higher requirements"}
+ 
+ ggplot(train_set, aes(minimum_nights)) + 
+  geom_histogram() + 
+  xlim(0,50) +
+  theme_classic() +
+  ggtitle("Minimum Nights Distribution for Requirements <= 50 nights")
+```
+
+**Project Goal:** The goal of this project is to improve the RMSE of price predictions currently based on the average price for NYC AirBNB properties.
+
+**Key Steps:**
+  
+The key steps we take in order to derive the algorithm include the following:
+  
+1) *Create a Train and Test set:* We create a test, training, and validation set using the AirBNB data to cross validate the model without overtraining.
+    
+2) *Clean Data:* We check for NA fields in the data.
+
+3) *Explore Insights:* We analyze Data correlations between elements of the cleaned data to help pinpoint where to focus the algorithm.
+
+4) *Model Algorithms:* We try different algorithms on the training set.
+
+5) *Evaluate Performance:* We use the algorithm to predict prices for the test set and then compare the predictions to the actual prices in the test set.
+
+6) *Finalize Model:* The model producing the lowerst RMSE becomes our final model.
+
+7) *Validate Results:* We test the final model by predicting prices for the validation set and comparing the predictions to the actual prices in the validation set.
+  
+## Methods/Analysis
+  
+**Data Cleaning:**
+
+*1) Check data for NA values:* The data is fairly complete with the reviews the only section with NA because many properties have not been reviewed. 
+
+```{r echo = FALSE, results = 'asis', fig.pos="H"} 
+sapply(train_set, function(x) sum(is.na(x)))
+
+```
+
+*1) Create a test, training, and validation set:* We use the caret package to partition the data first into a validation and train set, then we further partition the train set into a test and train set.
+
+```{r echo=TRUE, eval=FALSE}
+test_index<-createDataPartition(data$price,times=1,p = .2, list=FALSE)
+
+validation_set<-data[test_index,]
+train_set<-data[-test_index,]
+
+test_index<-createDataPartition(train_set$price,times=1,p = .2, list=FALSE)
+
+test_set<-train_set[test_index,]
+train_set<-train_set[-test_index,]
+
+```
+
+**Data Exploration, Visualization, and Insights:**
+
+*Location Effect:* With the common real estate mantra being "Location, Location, Location", we expect location data to have a large impact on room prices. As we see from figures 1 and 2 above, Manhattan has the highest average price, with Brooklyn a close second and the other three about equal. However, the high variability within each group shows that other factors also play a large role in price.
+
+*Length of Stay Effect:* We expect length of stay to have a negative impact on price since longer stays typically have a discount over the regular price. Figure 5 show the length of stay compared to price faceted by Neighborhood Group for listings less than $300. In order to control for confounding from the room type, we filter the data for Private Rooms only. We see the data has a weak negative correlation (most visibly seen in Queens).
+
+```{r echo=FALSE, fig.align="center", fig.pos="H", fig.cap="The data has a weak negative correlation (most visibly seen in Queens)."}
+ 
+ filter(train_set, room_type == "Private room") %>% 
+  ggplot(aes(x = price, y = minimum_nights)) + 
+  geom_point() + 
+  facet_wrap(~neighbourhood_group) + 
+  xlim(0,300) +
+  theme_classic() +
+  ggtitle("Price vs Minimum Nights for Private Room Listings <= $300")
+```
+
+
+*Room Type Effect:* We expect the room type to affect the price with guests willing to spend more for an Entire Home/Apt than they are willing to spend on a Shared Room. Figure 6 shows boxplots with Entire Home/Apt having the highest mean price and Shared Room having the lowest. However, these boxplots also show variability due to other factors with some private rooms pricing higher than the mean for an Entire home/apt. We filter the data for Queens to limit some of the confounding due to location.
+
+```{r echo=FALSE, fig.align="center", fig.pos="H", fig.cap="A Shared room has the lowest average price while an Entire Home/Apt has the highest."}
+ 
+ filter(train_set, neighbourhood_group == "Queens") %>% 
+  ggplot(aes(room_type, price)) + 
+    ylim(0,300) + 
+    geom_boxplot() + 
+    theme_classic() +
+    ggtitle("Price Distribution in Queens Based on Room Type for Prices<=$300")
+```
+
+**Modeling Approach:**
+
+*Base Model:* The current base model predicts the price of each property based on the overall average price. Using this model, our Base RMSE for the test set is 193.80.
+
+```{r echo=TRUE, eval=TRUE}
+
+mu<-mean(train_set$price)
+Base_RMSE<-RMSE(test_set$price, mu)
+
+```
+
+*Linear Regression Model:* We add location, room type, and length of stay affects using a linear regression model.
+
+```{r echo=TRUE, eval=FALSE}
+train_lm<-train(price ~ room_type+neighbourhood_group+minimum_nights, 
+          data = train_set, method = "lm")
+preds<-predict(train_lm, test_set)
+RMSE(test_set$price, preds)
+
+```
+
+We adjust this equation to try different combinations of predictors and different variables for location (latitude/longitude - neighbourhood is not used because many of the neighbourhoods have insufficient data to create a model) with the following results:
+
+```{r echo=FALSE, eval=TRUE}
+train_lm<-train(price ~ room_type, data = train_set, method = "lm")
+preds<-predict(train_lm, test_set)
+RMSE_room_type<-RMSE(test_set$price, preds)
+
+train_lm<-train(price ~ room_type + minimum_nights, data = train_set, method = "lm")
+preds<-predict(train_lm, test_set)
+RMSE_room_type_min_nights<-RMSE(test_set$price, preds)
+
+train_lm<-train(price ~ room_type + minimum_nights + latitude + longitude, data = train_set, method = "lm")
+preds<-predict(train_lm, test_set)
+RMSE_room_type_min_nights_latlong<-RMSE(test_set$price, preds)
+
+train_lm<-train(price ~ room_type+neighbourhood_group+minimum_nights, data = train_set, method = "lm")
+preds<-predict(train_lm, test_set)
+RMSE_room_type_min_nights_neighbourhood_group<-RMSE(test_set$price, preds)
+
+rmse_results <- tibble(method = "Base Model", RMSE = Base_RMSE)
+rmse_results <- add_row(rmse_results, method = "Room Type Effect", RMSE = RMSE_room_type)
+rmse_results <- add_row(rmse_results, method = "Room Type + Minimum Nights Effect", RMSE = RMSE_room_type_min_nights)
+rmse_results <- add_row(rmse_results, method = "Room Type + Minimum Nights + Latitude/Longitude Effect", RMSE = RMSE_room_type_min_nights_latlong)
+rmse_results <- add_row(rmse_results, method = "Room Type + Minimum Nights + Neighbourhood Group Effect", RMSE = RMSE_room_type_min_nights_neighbourhood_group)
+rmse_results<-as.data.frame(rmse_results)
+
+kable(rmse_results,format = "latex", caption = "RMSE Results Summary", booktabs = T)
+```
+\FloatBarrier
+
+*RPart Model:* We also try an RPART model to create a tree of effects.
+
+```{r echo=TRUE, eval=TRUE}
+train_rpart<-train(price ~ room_type+neighbourhood_group+minimum_nights, 
+                   data = train_set, method = "rpart")
+preds<-predict(train_rpart, test_set)
+RMSE_RPART<-RMSE(test_set$price, preds)
+
+```
+
+The rpart model gives the following tree:
+
+```{r echo=TRUE, eval=TRUE}
+rpart.plot(train_rpart$finalModel)
+```
+
+The model uses room type and neighbourhood group to determine price with an RMSE of 183.12, which is still higher that the RMSE of our previous model.
+
+The RMSE is the lowest using the lm model with room type, minimum nights, and neighbourhood group (RMSE = 182.16) so this becomes our final model. This is a 6% improvement from the base RMSE of 193.80.
+
+## Results
+
+**Model Results:** Our final model uses the following formula to predict AirBNB prices:
+
+```{r echo=FALSE, eval=TRUE}
+train_lm<-train(price ~ room_type+neighbourhood_group+minimum_nights, data = train_set, method = "lm")
+preds<-predict(train_lm, test_set)
+RMSE_final<-RMSE(test_set$price, preds)
+
+```
+```{r echo=TRUE, eval=TRUE}
+train_lm$finalModel
+```
+
+The final model gives an RMSE of 182.16 which is a 6% improvement from the base model's 193.80 RMSE. On average, our model differs from the actual price by $182. If we look at the top 10 greatest errors in prediction, we get the result in Table 6 and 7.
+
+We see that the errors occur due to the skewed data from luxury properties. The largest error is a luxury townhouse in Greenwich Village that rents for $6,000 per night. There is also an event space that is likely much larger than the other properties that rents for $5,000 per night. In order to tease out these differences we would need to add additional information to the dataset. This could be acheived by creating a star grading system similar to hotel stars that indicates the level of luxury the property offers along with square footage and number of beds. Another option could be to add address data to this data set and match it to a Zillow Zestimate to gauge the level of luxury and add in square footage and number of bedrooms. Based on a quick analysis where we split the properties into 5 groups based on price, we expect we could improve the RMSE by at least 30% by adding a luxury metric up with 5 groupings.
+
+\pagebreak
+\FloatBarrier
+```{r echo=FALSE, eval=TRUE}
+top_error<-test_set %>% 
+  mutate(pred=preds, error = abs(price - pred)) %>% 
+  arrange(desc(error)) %>% 
+  select(name, neighbourhood_group, minimum_nights, room_type, price, pred, error)
+
+top_error<-as.data.frame(top_error[1:10,])
+
+kable(top_error[1:10,1:3],format = "latex", caption = "Top Error Summary", booktabs = T) %>%
+kable_styling(position = "left")
+
+kable(top_error[1:10,4:6],format = "latex", caption = "Top Error Summary Cont.", booktabs = T) %>%
+kable_styling(position = "left")
+```
+\FloatBarrier
+
+
+**Model Performance:**
+
+We run the model on our validation set in order to determine performance.
+
+```{r echo=TRUE, eval=TRUE}
+preds<-predict(train_lm, validation_set)
+RMSE(validation_set$price, preds)
+
+```
+
+Our final RMSE is **282.41** compared to 290.25, an improvement of 3%.
+
+## Conclusion
+
+**Summary:** Though our model does improve the predictions compared to the base by 3%, additional information will need to be added to the data in order to improve the model and make it useful for giving meaningful predictions about price. Currently, the model will error by $282 on average when making predictions. Most of the error occurs with high priced luxury properties. 
+
+**Recommendations:** Incorporate the following information into the data:
+1) A new metric such as a star rating system, in order to differentiate the quality of these properties 
+2) Information about size and number of beds.
+
+This data could be added by adding questions when users list the property or by incorporating data such as the Zestimate and number of bedrooms from Zillow matching on address.
+
+
+
+
